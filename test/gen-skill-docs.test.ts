@@ -1588,7 +1588,18 @@ describe('Codex generation (--host codex)', () => {
       const content = fs.readFileSync(metadata, 'utf-8');
       expect(content).toContain(`display_name: "${skill.codexName}"`);
       expect(content).toContain('short_description:');
-      expect(content).toContain('allow_implicit_invocation: true');
+      expect(content).toContain('allow_implicit_invocation: false');
+    }
+  });
+
+  test('Codex frontmatter uses gstack-* names and explicit invocation descriptions', () => {
+    for (const skill of CODEX_SKILLS) {
+      const content = fs.readFileSync(path.join(AGENTS_DIR, skill.codexName, 'SKILL.md'), 'utf-8');
+      const fmEnd = content.indexOf('\n---', 4);
+      const frontmatter = content.slice(4, fmEnd);
+      expect(frontmatter).toContain(`name: ${skill.codexName}`);
+      expect(frontmatter).toContain('Invoke via `/skills`');
+      expect(frontmatter).toContain(`$${skill.codexName}`);
     }
   });
 
@@ -2248,8 +2259,10 @@ describe('setup script validation', () => {
     expect(fnBody).not.toContain('ln -snf "$gstack_dir" "$codex_gstack"');
   });
 
-  test('direct Codex installs are migrated out of ~/.codex/skills/gstack', () => {
+  test('direct Codex installs are migrated out of Codex skill roots', () => {
     expect(setupContent).toContain('migrate_direct_codex_install');
+    expect(setupContent).toContain('CODEX_SKILLS="$HOME/.agents/skills"');
+    expect(setupContent).toContain('LEGACY_CODEX_SKILLS="$HOME/.codex/skills"');
     expect(setupContent).toContain('$HOME/.gstack/repos/gstack');
     expect(setupContent).toContain('avoid duplicate skill discovery');
   });

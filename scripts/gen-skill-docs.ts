@@ -17,7 +17,6 @@ import * as path from 'path';
 import type { Host, TemplateContext } from './resolvers/types';
 import { HOST_PATHS } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
-import { externalSkillName, extractHookSafetyProse as _extractHookSafetyProse, extractNameAndDescription as _extractNameAndDescription, condenseOpenAIShortDescription as _condenseOpenAIShortDescription, generateOpenAIYaml as _generateOpenAIYaml } from './resolvers/codex-helpers';
 import { generatePlanCompletionAuditShip, generatePlanCompletionAuditReview, generatePlanVerificationExec } from './resolvers/review';
 import { ALL_HOST_CONFIGS, ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
@@ -64,6 +63,10 @@ const MODEL_ARG_VAL: Model = (() => {
 
 // ─── External Host Helpers ───────────────────────────────────
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Re-export local copy for use in this file (matches codex-helpers.ts)
 // Accepts optional frontmatter name to support directory/invocation name divergence
 function externalSkillName(skillDir: string, frontmatterName?: string): string {
@@ -74,6 +77,46 @@ function externalSkillName(skillDir: string, frontmatterName?: string): string {
   // Don't double-prefix: gstack-upgrade → gstack-upgrade (not gstack-gstack-upgrade)
   if (baseName.startsWith('gstack-')) return baseName;
   return `gstack-${baseName}`;
+}
+
+let cachedSkillReferenceNames: string[] | null = null;
+
+function getSkillReferenceNames(): string[] {
+  if (cachedSkillReferenceNames) return cachedSkillReferenceNames;
+  const names = new Set<string>();
+
+  for (const template of discoverTemplates(ROOT)) {
+    const tmplPath = path.join(ROOT, template.tmpl);
+    const skillDir = path.relative(ROOT, path.dirname(tmplPath));
+    const dirName = skillDir === '.' ? '' : skillDir;
+    if (dirName) names.add(dirName);
+
+    const content = fs.readFileSync(tmplPath, 'utf-8');
+    const { name } = extractNameAndDescription(content);
+    if (name) names.add(name);
+  }
+
+  cachedSkillReferenceNames = [...names]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  return cachedSkillReferenceNames;
+}
+
+function rewriteCodexSkillReferences(text: string): string {
+  const names = getSkillReferenceNames();
+  if (names.length === 0) return text;
+  const skillReferenceRegex = new RegExp(
+    `(^|[\\s([{"'\`>])\\/(${names.map(escapeRegExp).join('|')})(?=\\b)`,
+    'gm',
+  );
+  return text.replace(
+    skillReferenceRegex,
+    (_match, prefix: string, skill: string) => `${prefix}$${externalSkillName(skill)}`,
+  );
+}
+
+function buildCodexSkillDescription(description: string, codexName: string): string {
+  return `Invoke via \`/skills\` or \`$${codexName}\`.\n${rewriteCodexSkillReferences(description)}`;
 }
 
 function extractNameAndDescription(content: string): { name: string; description: string } {
@@ -190,7 +233,7 @@ function generateOpenAIYaml(displayName: string, shortDescription: string): stri
   short_description: ${JSON.stringify(shortDescription)}
   default_prompt: ${JSON.stringify(`Use ${displayName} for this task.`)}
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false
 `;
 }
 
@@ -200,7 +243,11 @@ policy:
  * Codex: keeps name + description only, enforces 1024-char limit.
  * Factory: keeps name + description + user-invocable, conditionally adds disable-model-invocation.
  */
-function transformFrontmatter(content: string, host: Host): string {
+function transformFrontmatter(
+  content: string,
+  host: Host,
+  overrides?: { name?: string; description?: string },
+): string {
   const hostConfig = getHostConfig(host);
   const fm = hostConfig.frontmatter;
 
@@ -224,26 +271,28 @@ function transformFrontmatter(content: string, host: Host): string {
   const frontmatter = content.slice(fmStart + 4, fmEnd);
   const body = content.slice(fmEnd + 4);
   const { name, description } = extractNameAndDescription(content);
+  const effectiveName = overrides?.name ?? name;
+  const effectiveDescription = overrides?.description ?? description;
 
   // Description limit enforcement
   if (fm.descriptionLimit) {
     const behavior = fm.descriptionLimitBehavior || 'error';
-    if (description.length > fm.descriptionLimit) {
+    if (effectiveDescription.length > fm.descriptionLimit) {
       if (behavior === 'error') {
         throw new Error(
-          `${hostConfig.displayName} description for "${name}" is ${description.length} chars (max ${fm.descriptionLimit}). ` +
+          `${hostConfig.displayName} description for "${effectiveName}" is ${effectiveDescription.length} chars (max ${fm.descriptionLimit}). ` +
           `Compress the description in the .tmpl file.`
         );
       } else if (behavior === 'warn') {
-        console.warn(`WARNING: ${hostConfig.displayName} description for "${name}" exceeds ${fm.descriptionLimit} chars`);
+        console.warn(`WARNING: ${hostConfig.displayName} description for "${effectiveName}" exceeds ${fm.descriptionLimit} chars`);
       }
       // 'truncate' — silently proceed
     }
   }
 
   // Build frontmatter with allowed fields
-  const indentedDesc = description.split('\n').map(l => `  ${l}`).join('\n');
-  let newFm = `---\nname: ${name}\ndescription: |\n${indentedDesc}\n`;
+  const indentedDesc = effectiveDescription.split('\n').map(l => `  ${l}`).join('\n');
+  let newFm = `---\nname: ${effectiveName}\ndescription: |\n${indentedDesc}\n`;
 
   // Add extra fields (host-wide)
   if (fm.extraFields) {
@@ -368,8 +417,18 @@ function processExternalHost(
   // Extract hook safety prose BEFORE transforming frontmatter (which strips hooks)
   const safetyProse = extractHookSafetyProse(tmplContent);
 
+  const isCodex = host === 'codex';
+  const rewrittenContent = isCodex ? rewriteCodexSkillReferences(content) : content;
+  const descriptionOverride = isCodex
+    ? buildCodexSkillDescription(extractedDescription, name)
+    : undefined;
+
   // Transform frontmatter (host-aware)
-  let result = transformFrontmatter(content, host);
+  let result = transformFrontmatter(
+    rewrittenContent,
+    host,
+    isCodex ? { name, description: descriptionOverride } : undefined,
+  );
 
   // Insert safety advisory at the top of the body (after frontmatter)
   if (safetyProse) {
@@ -393,7 +452,8 @@ function processExternalHost(
   if (hostConfig.generation.generateMetadata && !symlinkLoop) {
     const agentsDir = path.join(outputDir, 'agents');
     fs.mkdirSync(agentsDir, { recursive: true });
-    const shortDescription = condenseOpenAIShortDescription(extractedDescription);
+    const metadataDescription = isCodex ? rewriteCodexSkillReferences(extractedDescription) : extractedDescription;
+    const shortDescription = condenseOpenAIShortDescription(metadataDescription);
     fs.writeFileSync(path.join(agentsDir, 'openai.yaml'), generateOpenAIYaml(name, shortDescription));
   }
 

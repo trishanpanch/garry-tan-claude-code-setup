@@ -57,7 +57,7 @@ export function generateOpenAIYaml(displayName: string, shortDescription: string
   short_description: ${JSON.stringify(shortDescription)}
   default_prompt: ${JSON.stringify(`Use ${displayName} for this task.`)}
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false
 `;
 }
 
@@ -69,12 +69,20 @@ export function externalSkillName(skillDir: string): string {
   return `gstack-${skillDir}`;
 }
 
+export function buildExternalSkillDescription(description: string, externalName: string): string {
+  return `Invoke via \`/skills\` or \`$${externalName}\`.\n${description}`;
+}
+
 /**
  * Transform frontmatter for Codex: keep only name + description.
  * Strips allowed-tools, hooks, version, and all other fields.
  * Handles multiline block scalar descriptions (YAML | syntax).
  */
-export function transformFrontmatter(content: string, host: Host): string {
+export function transformFrontmatter(
+  content: string,
+  host: Host,
+  overrides?: { name?: string; description?: string },
+): string {
   if (host === 'claude') return content;
 
   // Find frontmatter boundaries
@@ -85,19 +93,21 @@ export function transformFrontmatter(content: string, host: Host): string {
 
   const body = content.slice(fmEnd + 4); // includes the leading \n after ---
   const { name, description } = extractNameAndDescription(content);
+  const effectiveName = overrides?.name ?? name;
+  const effectiveDescription = overrides?.description ?? description;
 
   // Codex 1024-char description limit — fail build, don't ship broken skills
   const MAX_DESC = 1024;
-  if (description.length > MAX_DESC) {
+  if (effectiveDescription.length > MAX_DESC) {
     throw new Error(
-      `Codex description for "${name}" is ${description.length} chars (max ${MAX_DESC}). ` +
+      `Codex description for "${effectiveName}" is ${effectiveDescription.length} chars (max ${MAX_DESC}). ` +
       `Compress the description in the .tmpl file.`
     );
   }
 
   // Re-emit Codex frontmatter (name + description only)
-  const indentedDesc = description.split('\n').map(l => `  ${l}`).join('\n');
-  const codexFm = `---\nname: ${name}\ndescription: |\n${indentedDesc}\n---`;
+  const indentedDesc = effectiveDescription.split('\n').map(l => `  ${l}`).join('\n');
+  const codexFm = `---\nname: ${effectiveName}\ndescription: |\n${indentedDesc}\n---`;
   return codexFm + body;
 }
 

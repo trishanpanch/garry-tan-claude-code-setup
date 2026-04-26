@@ -1,16 +1,26 @@
 import type { TemplateContext } from '../types';
 
 export function generateUpgradeCheck(ctx: TemplateContext): string {
-  return `If \`PROACTIVE\` is \`"false"\`, do not proactively suggest gstack skills AND do not
-auto-invoke skills based on conversation context. Only run skills the user explicitly
-types (e.g., /qa, /ship). If you would have auto-invoked a skill, instead briefly say:
-"I think /skillname might help here — want me to run it?" and wait for confirmation.
-The user opted out of proactive behavior.
-
-If \`SKILL_PREFIX\` is \`"true"\`, the user has namespaced skill names. When suggesting
+  const explicitExamples = ctx.host === 'codex'
+    ? 'types or mentions via `/skills` (for example, $gstack-qa or $gstack-ship)'
+    : 'types (e.g., /qa, /ship)';
+  const suggestionExample = ctx.host === 'codex'
+    ? '$gstack-<skill>'
+    : '/skillname';
+  const prefixInstruction = ctx.host === 'codex'
+    ? 'If `SKILL_PREFIX` is `"true"`, ignore it for Codex. Codex skills are always invoked with `$gstack-*` names via `/skills`; disk paths are unaffected.'
+    : `If \`SKILL_PREFIX\` is \`"true"\`, the user has namespaced skill names. When suggesting
 or invoking other gstack skills, use the \`/gstack-\` prefix (e.g., \`/gstack-qa\` instead
 of \`/qa\`, \`/gstack-ship\` instead of \`/ship\`). Disk paths are unaffected — always use
-\`${ctx.paths.skillRoot}/[skill-name]/SKILL.md\` for reading skill files.
+\`${ctx.paths.skillRoot}/[skill-name]/SKILL.md\` for reading skill files.`;
+
+  return `If \`PROACTIVE\` is \`"false"\`, do not proactively suggest gstack skills AND do not
+auto-invoke skills based on conversation context. Only run skills the user explicitly
+${explicitExamples}. If you would have auto-invoked a skill, instead briefly say:
+"I think ${suggestionExample} might help here — want me to run it?" and wait for confirmation.
+The user opted out of proactive behavior.
+
+${prefixInstruction}
 
 If output shows \`UPGRADE_AVAILABLE <old> <new>\`: read \`${ctx.paths.skillRoot}/gstack-upgrade/SKILL.md\` and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined).
 
@@ -45,4 +55,3 @@ prompts from sub-sessions.
 After handling JUST_UPGRADED (prompts done or skipped), continue with the skill
 workflow.`;
 }
-
