@@ -75,3 +75,22 @@
 - Result: 763 passing, 0 failing.
 - Ran `bun test test/codex-e2e.test.ts`.
 - Result: 4 skipped, 0 failing; live Codex E2E behavior was not exercised by the harness.
+
+## Entry 004 — 2026-04-26 — Remote branch publication
+
+- Date: 2026-04-26
+- Title: Remote branch publication
+- Status: Completed
+- Scope: Publish Codex-compatible upstream replay branch
+
+### Summary
+
+- Committed the upstream-compatible Codex patch locally.
+- Upstream `garrytan/gstack` rejected direct push, as expected for a fork workflow.
+- Published the branch to the authenticated user's fork: `trishanpanch/garry-tan-claude-code-setup`.
+
+### Outcome
+
+- Commit: `3e482a2 Improve Codex skill compatibility`.
+- Remote branch: `codex/upstream-compat`.
+- Pull request URL: `https://github.com/trishanpanch/garry-tan-claude-code-setup/pull/new/codex/upstream-compat`.
